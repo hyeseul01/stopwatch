@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TV 스탑워치 - 블루투스 키보드 전용</title>
+    <!-- Tailwind CSS 로드 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts: JetBrains Mono (숫자 가독성 극대화) & Pretendard/Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@500;700;800&display=swap" rel="stylesheet">
+    <style>
+        /* 기본 배경 및 폰트 설정 */
+        body {
+            background-color: #09090b;
+            color: #fafafa;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            overflow: hidden; /* 스크롤 방지 */
+            user-select: none; /* 텍스트 드래그 방지 */
+            -webkit-user-select: none;
+        }
+
+        /* 타이머 숫자 전용 고정폭 스타일 (숫자 변경 시 흔들림 방지) */
+        .timer-digits {
+            font-family: 'JetBrains Mono', monospace;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: -0.04em;
+        }
+
+        /* 상태별 글로우 효과 */
+        .glow-ready {
+            box-shadow: inset 0 0 80px rgba(59, 130, 246, 0.08);
+            border-color: rgba(59, 130, 246, 0.25);
+        }
+        .glow-running {
+            box-shadow: inset 0 0 120px rgba(16, 185, 129, 0.14);
+            border-color: rgba(16, 185, 129, 0.45);
+        }
+        .glow-paused {
+            box-shadow: inset 0 0 100px rgba(245, 158, 11, 0.12);
+            border-color: rgba(245, 158, 11, 0.4);
+        }
+
+        /* 커스텀 스크롤바 (구간 기록 영역) */
+        .lap-scroll::-webkit-scrollbar {
+            width: 6px;
+        }
+        .lap-scroll::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 9999px;
+        }
+        .lap-scroll::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 9999px;
+        }
+
+        /* 키 입력 시 시각적 피드백 애니메이션 */
+        @keyframes pulse-ring {
+            0% { transform: scale(0.98); opacity: 0.8; }
+            100% { transform: scale(1.02); opacity: 0; }
+        }
+        .animate-feedback {
+            animation: pulse-ring 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+    </style>
+</head>
+<body class="w-screen h-screen flex flex-col justify-between p-4 sm:p-8 md:p-10 relative transition-colors duration-500">
+
+    <!-- 외곽 상태 표시 테두리 프레임 -->
+    <div id="statusFrame" class="fixed inset-2 sm:inset-4 rounded-3xl border-2 border-zinc-800/80 pointer-events-none transition-all duration-500 glow-ready z-0"></div>
+
+    <!-- 상단 헤더: 상태 뱃지 및 유틸리티 버튼 -->
+    <header class="relative z-10 flex items-center justify-between w-full max-w-7xl mx-auto">
+        <!-- 현재 타이머 상태 표시기 -->
+        <div class="flex items-center gap-3 sm:gap-4 bg-zinc-900/90 border border-zinc-800 px-4 py-2 sm:px-6 sm:py-3 rounded-2xl backdrop-blur-md">
+            <span id="statusDot" class="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-blue-500 transition-colors duration-300"></span>
+            <span id="statusText" class="text-base sm:text-xl md:text-2xl font-bold tracking-wider text-blue-400">준비됨</span>
+            <span id="wakeLockBadge" class="hidden md:inline-flex items-center gap-1.5 text-xs font-medium text-zinc-400 bg-zinc-800/80 px-2.5 py-1 rounded-lg ml-2" title="타이머 작동 중 TV 화면이 꺼지지 않도록 유지합니다">
+                <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                화면 꺼짐 방지 활성
+            </span>
+        </div>
+
+        <!-- 우측 컨트롤 버튼 (소리, 전체화면, 리모컨용 버튼) -->
+        <div class="flex items-center gap-2 sm:gap-3">
+            <!-- 소리 켜기/끄기 버튼 -->
+            <button id="muteBtn" type="button" class="flex items-center gap-2 bg-zinc-900/90 hover:bg-zinc-800 active:scale-95 text-zinc-300 border border-zinc-800 px-3.5 py-2.5 sm:px-5 sm:py-3 rounded-2xl transition-all cursor-pointer" title="효과음 켜기/끄기 (단축키: M)">
+                <svg id="soundOnIcon" class="w-5 h-5 sm:w-6 sm:h-6 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"></path>
+                </svg>
+                <svg id="soundOffIcon" class="w-5 h-5 sm:w-6 sm:h-6 text-zinc-500 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"></path>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2"></path>
+                </svg>
+                <span id="muteLabel" class="hidden sm:inline text-sm sm:text-base font-semibold">효과음 켜짐</span>
+            </button>
+
+            <!-- 전체 화면 전환 버튼 -->
+            <button id="fullscreenBtn" type="button" class="flex items-center gap-2 bg-zinc-900/90 hover:bg-zinc-800 active:scale-95 text-zinc-300 border border-zinc-800 px-3.5 py-2.5 sm:px-5 sm:py-3 rounded-2xl transition-all cursor-pointer" title="전체 화면 전환 (단축키: F)">
+                <svg id="expandIcon" class="w-5 h-5 sm:w-6 sm:h-6 text-zinc-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"></path>
+                </svg>
+                <svg id="compressIcon" class="w-5 h-5 sm:w-6 sm:h-6 text-zinc-300 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5l5.25 5.25"></path>
+                </svg>
+                <span id="fullscreenLabel" class="hidden sm:inline text-sm sm:text-base font-semibold">전체 화면</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- 중앙 메인 디스플레이 영역 -->
+    <main class="relative z-10 flex-1 flex flex-col items-center justify-center w-full max-w-7xl mx-auto my-auto">
+        
+        <!-- 타이머 숫자 컨테이너 -->
+        <div id="timerContainer" class="relative flex flex-col items-center justify-center w-full py-4 sm:py-8">
+            <!-- 시간 표시 (시:분:초.밀리초) -->
+            <div class="timer-digits flex items-baseline justify-center font-extrabold leading-none select-none tracking-tight">
+                <!-- 시간(Hour) 영역: 1시간 이상 경과 시 자동 표시 -->
+                <span id="hoursDisplay" class="hidden text-[13vw] sm:text-[14vw] lg:text-[11.5rem] xl:text-[13.5rem] text-zinc-100">00:</span>
+                <!-- 분:초 영역 -->
+                <span id="mainTimeDisplay" class="text-[18vw] sm:text-[19vw] lg:text-[15.5rem] xl:text-[18.5rem] text-white transition-colors duration-300">00:00</span>
+                <!-- 센티초(.00) 영역 -->
+                <span id="centisDisplay" class="text-[9vw] sm:text-[9.5vw] lg:text-[7.5rem] xl:text-[9rem] text-zinc-400 ml-1 sm:ml-2 transition-colors duration-300">.00</span>
+            </div>
+
+            <!-- 마우스/TV 리모컨 포인터 사용자를 위한 보조 액션 버튼 (평소엔 깔끔하게, 호버/터치 시 직관적) -->
+            <div class="flex items-center gap-3 sm:gap-4 mt-6 sm:mt-10">
+                <button id="toggleBtn" type="button" class="px-6 py-3 sm:px-8 sm:py-3.5 rounded-2xl font-bold text-base sm:text-lg bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-950/50 active:scale-95 transition-all cursor-pointer flex items-center gap-2">
+                    <span id="toggleBtnText">시작 (Space)</span>
+                </button>
+                <button id="lapBtn" type="button" disabled class="px-5 py-3 sm:px-7 sm:py-3.5 rounded-2xl font-bold text-base sm:text-lg bg-zinc-800/80 hover:bg-zinc-700 disabled:opacity-35 disabled:pointer-events-none text-zinc-200 border border-zinc-700/80 active:scale-95 transition-all cursor-pointer">
+                    구간 기록 (L)
+                </button>
+                <button id="resetBtn" type="button" disabled class="px-5 py-3 sm:px-7 sm:py-3.5 rounded-2xl font-bold text-base sm:text-lg bg-zinc-800/80 hover:bg-rose-950/70 hover:text-rose-300 hover:border-rose-800/60 disabled:opacity-35 disabled:pointer-events-none text-zinc-300 border border-zinc-700/80 active:scale-95 transition-all cursor-pointer">
+                    초기화 (R)
+                </button>
+            </div>
+        </div>
+
+        <!-- 구간 기록(Lap) 리스트 컨테이너 (기록이 있을 때만 부드럽게 표시됨) -->
+        <div id="lapSection" class="hidden w-full max-w-2xl mt-2 sm:mt-4 bg-zinc-900/75 border border-zinc-800/90 rounded-2xl p-3 sm:p-4 backdrop-blur-md transition-all">
+            <div class="flex items-center justify-between text-xs sm:text-sm font-semibold text-zinc-400 px-3 pb-2 border-b border-zinc-800">
+                <span>구간 번호</span>
+                <span>구간 소요 시간</span>
+                <span>누적 시간</span>
+            </div>
+            <ul id="lapList" class="lap-scroll max-h-28 sm:max-h-36 overflow-y-auto divide-y divide-zinc-800/60 timer-digits text-sm sm:text-lg">
+                <!-- 자바스크립트로 구간 기록 항목 동적 추가 -->
+            </ul>
+        </div>
+
+    </main>
+
+    <!-- 하단 단축키 안내 바 (타이머 작동 중에는 눈의 피로를 줄이기 위해 은은하게 어두워짐) -->
+    <footer id="shortcutFooter" class="relative z-10 w-full max-w-5xl mx-auto transition-opacity duration-500 opacity-95">
+        <div class="flex flex-wrap items-center justify-center gap-3 sm:gap-6 md:gap-8 bg-zinc-900/80 border border-zinc-800/80 px-4 py-3 sm:px-8 sm:py-4 rounded-2xl backdrop-blur-md text-xs sm:text-sm md:text-base text-zinc-300">
+            <div class="flex items-center gap-2">
+                <kbd class="px-2.5 py-1 bg-zinc-800 text-zinc-100 font-mono font-bold rounded-lg border border-zinc-700 shadow-sm">Space</kbd>
+                <span>시작 / 정지</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <kbd class="px-2.5 py-1 bg-zinc-800 text-zinc-100 font-mono font-bold rounded-lg border border-zinc-700 shadow-sm">R</kbd>
+                <span>초기화</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <kbd class="px-2.5 py-1 bg-zinc-800 text-zinc-100 font-mono font-bold rounded-lg border border-zinc-700 shadow-sm">L</kbd>
+                <span>구간 기록</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <kbd class="px-2.5 py-1 bg-zinc-800 text-zinc-100 font-mono font-bold rounded-lg border border-zinc-700 shadow-sm">F</kbd>
+                <span>전체 화면</span>
+            </div>
+            <div class="hidden md:flex items-center gap-2">
+                <kbd class="px-2.5 py-1 bg-zinc-800 text-zinc-100 font-mono font-bold rounded-lg border border-zinc-700 shadow-sm">M</kbd>
+                <span>음소거</span>
+            </div>
+        </div>
+    </footer>
+
+    <!-- 알림 토스트 메시지 (alert 대체용) -->
+    <div id="toastMessage" class="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-zinc-800 text-zinc-100 border border-zinc-700 px-5 py-2.5 rounded-xl text-sm sm:text-base font-medium shadow-2xl opacity-0 pointer-events-none transition-opacity duration-300">
+        알림 메시지
+    </div>
+
+    <script>
+        /**
+         * TV용 풀스크린 스탑워치 핵심 로직
+         * - performance.now() 기반 고정밀 시간 측정 (장시간 작동 시에도 오차 없음)
+         * - Web Audio API 합성 사운드 (외부 파일 없이 즉각적인 키 입력 피드백)
+         * - Screen Wake Lock API (TV 화면 절전 모드 진입 방지)
+         */
+        document.addEventListener('DOMContentLoaded', () => {
+            // --- DOM 요소 참조 ---
+            const statusFrame = document.getElementById('statusFrame');
+            const statusDot = document.getElementById('statusDot');
+            const statusText = document.getElementById('statusText');
+            const wakeLockBadge = document.getElementById('wakeLockBadge');
+
+            const hoursDisplay = document.getElementById('hoursDisplay');
+            const mainTimeDisplay = document.getElementById('mainTimeDisplay');
+            const centisDisplay = document.getElementById('centisDisplay');
+
+            const toggleBtn = document.getElementById('toggleBtn');
+            const toggleBtnText = document.getElementById('toggleBtnText');
+            const lapBtn = document.getElementById('lapBtn');
+            const resetBtn = document.getElementById('resetBtn');
+
+            const muteBtn = document.getElementById('muteBtn');
+            const soundOnIcon = document.getElementById('soundOnIcon');
+            const soundOffIcon = document.getElementById('soundOffIcon');
+            const muteLabel = document.getElementById('muteLabel');
+
+            const fullscreenBtn = document.getElementById('fullscreenBtn');
+            const expandIcon = document.getElementById('expandIcon');
+            const compressIcon = document.getElementById('compressIcon');
+            const fullscreenLabel = document.getElementById('fullscreenLabel');
+
+            const lapSection = document.getElementById('lapSection');
+            const lapList = document.getElementById('lapList');
+            const shortcutFooter = document.getElementById('shortcutFooter');
+            const toastMessage = document.getElementById('toastMessage');
+
+            // --- 상태 변수 ---
+            let isRunning = false;
+            let startTime = 0;          // 타이머가 시작(또는 재개)된 시점의 performance.now()
+            let elapsedBeforePause = 0; // 일시정지 전까지 누적된 밀리초(ms)
+            let animationFrameId = null;
+
+            let laps = [];              // 구간 기록 배열
+            let lastLapTotalTime = 0;   // 직전 구간 기록 시점의 누적 시간
+
+            let isMuted = false;        // 음소거 여부
+            let audioCtx = null;        // Web Audio API 컨텍스트
+            let wakeLock = null;        // Screen Wake Lock 객체
+            let toastTimeout = null;
+
+            // --- 토스트 알림 표시 함수 ---
+            function showToast(msg) {
+                toastMessage.textContent = msg;
+                toastMessage.classList.remove('opacity-0');
+                toastMessage.classList.add('opacity-100');
+                clearTimeout(toastTimeout);
+                toastTimeout = setTimeout(() => {
+                    toastMessage.classList.remove('opacity-100');
+                    toastMessage.classList.add('opacity-0');
+                }, 2200);
+            }
+
+            // --- Web Audio API 사운드 효과 생성기 ---
+            function playTone(type) {
+                if (isMuted) return;
+                try {
+                    if (!audioCtx) {
+                        const AudioContext = window.AudioContext || window.webkitAudioContext;
+                        audioCtx = new AudioContext();
+                    }
+                    if (audioCtx.state === 'suspended') {
+                        audioCtx.resume();
+                    }
+
+                    const oscillator = audioCtx.createOscillator();
+                    const gainNode = audioCtx.createGain();
+
+                    oscillator.connect(gainNode);
+                    gainNode.connect(audioCtx.destination);
+
+                    const now = audioCtx.currentTime;
+
+                    if (type === 'start') {
+                        // 경쾌한 상승 톤 (시작)
+                        oscillator.type = 'sine';
+                        oscillator.frequency.setValueAtTime(587.33, now); // D5
+                        oscillator.frequency.exponentialRampToValueAtTime(880, now + 0.09); // A5
+                        gainNode.gain.setValueAtTime(0.18, now);
+                        gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+                        oscillator.start(now);
+                        oscillator.stop(now + 0.15);
+                    } else if (type === 'stop') {
+                        // 차분한 하강 톤 (정지)
+                        oscillator.type = 'sine';
+                        oscillator.frequency.setValueAtTime(523.25, now); // C5
+                        oscillator.frequency.exponentialRampToValueAtTime(392.00, now + 0.11); // G4
+                        gainNode.gain.setValueAtTime(0.18, now);
+                        gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+                        oscillator.start(now);
+                        oscillator.stop(now + 0.17);
+                    } else if (type === 'lap') {
+                        // 짧은 고음 틱 (구간 기록)
+                        oscillator.type = 'triangle';
+                        oscillator.frequency.setValueAtTime(1046.50, now); // C6
+                        gainNode.gain.setValueAtTime(0.12, now);
+                        gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+                        oscillator.start(now);
+                        oscillator.stop(now + 0.09);
+                    } else if (type === 'reset') {
+                        // 부드러운 저음 클릭 (초기화)
+                        oscillator.type = 'sine';
+                        oscillator.frequency.setValueAtTime(330, now);
+                        oscillator.frequency.exponentialRampToValueAtTime(220, now + 0.12);
+                        gainNode.gain.setValueAtTime(0.15, now);
+                        gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+                        oscillator.start(now);
+                        oscillator.stop(now + 0.16);
+                    }
+                } catch (e) {
+                    // 오디오 차단 환경 예외 무시
+                }
+            }
+
+            // --- Screen Wake Lock (TV 화면 절전 방지) ---
+            async function requestWakeLock() {
+                if ('wakeLock' in navigator) {
+                    try {
+                        wakeLock = await navigator.wakeLock.request('screen');
+                        wakeLockBadge.classList.remove('hidden');
+                        wakeLockBadge.classList.add('inline-flex');
+                        wakeLock.addEventListener('release', () => {
+                            wakeLockBadge.classList.add('hidden');
+                            wakeLockBadge.classList.remove('inline-flex');
+                        });
+                    } catch (err) {
+                        // 배터리 절약 모드 등 시스템 정책에 의해 거부될 수 있음
+                    }
+                }
+            }
+
+            async function releaseWakeLock() {
+                if (wakeLock !== null) {
+                    try {
+                        await wakeLock.release();
+                        wakeLock = null;
+                    } catch (err) {}
+                }
+            }
+
+            // 탭 전환 후 복귀 시 타이머가 실행 중이면 WakeLock 재요청
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible' && isRunning) {
+                    requestWakeLock();
+                }
+            });
+
+            // --- 시간 포맷팅 함수 ---
+            function formatTimeParts(ms) {
+                const totalCentis = Math.floor(ms / 10);
+                const centis = totalCentis % 100;
+                const totalSeconds = Math.floor(totalCentis / 100);
+                const seconds = totalSeconds % 60;
+                const totalMinutes = Math.floor(totalSeconds / 60);
+                const minutes = totalMinutes % 60;
+                const hours = Math.floor(totalMinutes / 60);
+
+                const pad = (n) => String(n).padStart(2, '0');
+
+                return {
+                    hours: hours > 0 ? `${pad(hours)}:` : '',
+                    main: `${pad(minutes)}:${pad(seconds)}`,
+                    centis: `.${pad(centis)}`,
+                    fullString: hours > 0 
+                        ? `${pad(hours)}:${pad(minutes)}:${pad(seconds)}.${pad(centis)}`
+                        : `${pad(minutes)}:${pad(seconds)}.${pad(centis)}`
+                };
+            }
+
+            // --- 화면 숫자 업데이트 ---
+            function renderTime(ms) {
+                const formatted = formatTimeParts(ms);
+                if (formatted.hours) {
+                    hoursDisplay.textContent = formatted.hours;
+                    hoursDisplay.classList.remove('hidden');
+                } else {
+                    hoursDisplay.classList.add('hidden');
+                }
+                mainTimeDisplay.textContent = formatted.main;
+                centisDisplay.textContent = formatted.centis;
+            }
+
+            // --- 애니메이션 루프 ---
+            function updateLoop() {
+                if (!isRunning) return;
+                const currentElapsed = (performance.now() - startTime) + elapsedBeforePause;
+                renderTime(currentElapsed);
+                animationFrameId = requestAnimationFrame(updateLoop);
+            }
+
+            // --- 상태별 UI 테마 적용 ---
+            function updateVisualState(state) {
+                // 테두리 글로우 초기화
+                statusFrame.classList.remove('glow-ready', 'glow-running', 'glow-paused');
+
+                if (state === 'RUNNING') {
+                    statusFrame.classList.add('glow-running');
+                    statusDot.className = 'w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-emerald-400 animate-pulse';
+                    statusText.textContent = '작동 중';
+                    statusText.className = 'text-base sm:text-xl md:text-2xl font-bold tracking-wider text-emerald-400';
+
+                    mainTimeDisplay.classList.remove('text-white', 'text-amber-300');
+                    mainTimeDisplay.classList.add('text-emerald-50');
+                    centisDisplay.classList.remove('text-zinc-400', 'text-amber-400/80');
+                    centisDisplay.classList.add('text-emerald-400');
+
+                    toggleBtn.className = 'px-6 py-3 sm:px-8 sm:py-3.5 rounded-2xl font-bold text-base sm:text-lg bg-amber-600 hover:bg-amber-500 text-white shadow-lg shadow-amber-950/50 active:scale-95 transition-all cursor-pointer flex items-center gap-2';
+                    toggleBtnText.textContent = '일시정지 (Space)';
+
+                    lapBtn.disabled = false;
+                    resetBtn.disabled = false;
+
+                    // 작동 중에는 하단 단축키 바를 은은하게 낮춰 시선 분산 방지
+                    shortcutFooter.classList.remove('opacity-95');
+                    shortcutFooter.classList.add('opacity-35', 'hover:opacity-95');
+
+                } else if (state === 'PAUSED') {
+                    statusFrame.classList.add('glow-paused');
+                    statusDot.className = 'w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-amber-400';
+                    statusText.textContent = '일시정지';
+                    statusText.className = 'text-base sm:text-xl md:text-2xl font-bold tracking-wider text-amber-400';
+
+                    mainTimeDisplay.classList.remove('text-white', 'text-emerald-50');
+                    mainTimeDisplay.classList.add('text-amber-300');
+                    centisDisplay.classList.remove('text-zinc-400', 'text-emerald-400');
+                    centisDisplay.classList.add('text-amber-400/80');
+
+                    toggleBtn.className = 'px-6 py-3 sm:px-8 sm:py-3.5 rounded-2xl font-bold text-base sm:text-lg bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-950/50 active:scale-95 transition-all cursor-pointer flex items-center gap-2';
+                    toggleBtnText.textContent = '계속하기 (Space)';
+
+                    lapBtn.disabled = true;
+                    resetBtn.disabled = false;
+
+                    shortcutFooter.classList.remove('opacity-35');
+                    shortcutFooter.classList.add('opacity-95');
+
+                } else {
+                    // READY (초기화 상태)
+                    statusFrame.classList.add('glow-ready');
+                    statusDot.className = 'w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-blue-500';
+                    statusText.textContent = '준비됨';
+                    statusText.className = 'text-base sm:text-xl md:text-2xl font-bold tracking-wider text-blue-400';
+
+                    mainTimeDisplay.classList.remove('text-emerald-50', 'text-amber-300');
+                    mainTimeDisplay.classList.add('text-white');
+                    centisDisplay.classList.remove('text-emerald-400', 'text-amber-400/80');
+                    centisDisplay.classList.add('text-zinc-400');
+
+                    toggleBtn.className = 'px-6 py-3 sm:px-8 sm:py-3.5 rounded-2xl font-bold text-base sm:text-lg bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-950/50 active:scale-95 transition-all cursor-pointer flex items-center gap-2';
+                    toggleBtnText.textContent = '시작 (Space)';
+
+                    lapBtn.disabled = true;
+                    resetBtn.disabled = true;
+
+                    shortcutFooter.classList.remove('opacity-35');
+                    shortcutFooter.classList.add('opacity-95');
+                }
+            }
+
+            // --- 핵심 제어 함수: 시작 / 일시정지 토글 ---
+            function toggleTimer() {
+                if (isRunning) {
+                    // 정지 처리
+                    isRunning = false;
+                    cancelAnimationFrame(animationFrameId);
+                    elapsedBeforePause += (performance.now() - startTime);
+                    renderTime(elapsedBeforePause);
+                    updateVisualState('PAUSED');
+                    playTone('stop');
+                    releaseWakeLock();
+                } else {
+                    // 시작 또는 재개 처리
+                    isRunning = true;
+                    startTime = performance.now();
+                    updateVisualState('RUNNING');
+                    playTone('start');
+                    requestWakeLock();
+                    animationFrameId = requestAnimationFrame(updateLoop);
+                }
+            }
+
+            // --- 핵심 제어 함수: 초기화 ---
+            function resetTimer() {
+                if (!isRunning && elapsedBeforePause === 0) return;
+
+                isRunning = false;
+                cancelAnimationFrame(animationFrameId);
+                startTime = 0;
+                elapsedBeforePause = 0;
+                laps = [];
+                lastLapTotalTime = 0;
+
+                lapList.innerHTML = '';
+                lapSection.classList.add('hidden');
+
+                renderTime(0);
+                updateVisualState('READY');
+                playTone('reset');
+                releaseWakeLock();
+                showToast('타이머가 초기화되었습니다');
+            }
+
+            // --- 핵심 제어 함수: 구간 기록 (Lap) ---
+            function recordLap() {
+                if (!isRunning) return;
+
+                const currentTotal = (performance.now() - startTime) + elapsedBeforePause;
+                const splitDuration = currentTotal - lastLapTotalTime;
+                lastLapTotalTime = currentTotal;
+
+                const lapNumber = laps.length + 1;
+                laps.unshift({
+                    number: lapNumber,
+                    split: splitDuration,
+                    total: currentTotal
+                });
+
+                playTone('lap');
+                lapSection.classList.remove('hidden');
+
+                // 최신 기록을 상단에 추가
+                const li = document.createElement('li');
+                li.className = 'flex items-center justify-between px-3 py-2 text-zinc-200 hover:bg-zinc-800/40 rounded-lg transition-colors';
+                li.innerHTML = `
+                    <span class="font-bold text-emerald-400">#${String(lapNumber).padStart(2, '0')}</span>
+                    <span class="text-zinc-300">+${formatTimeParts(splitDuration).fullString}</span>
+                    <span class="font-semibold text-white">${formatTimeParts(currentTotal).fullString}</span>
+                `;
+                lapList.prepend(li);
+            }
+
+            // --- 음소거 토글 ---
+            function toggleMute() {
+                isMuted = !isMuted;
+                if (isMuted) {
+                    soundOnIcon.classList.add('hidden');
+                    soundOffIcon.classList.remove('hidden');
+                    muteLabel.textContent = '음소거됨';
+                    showToast('효과음이 꺼졌습니다');
+                } else {
+                    soundOffIcon.classList.add('hidden');
+                    soundOnIcon.classList.remove('hidden');
+                    muteLabel.textContent = '효과음 켜짐';
+                    playTone('lap');
+                    showToast('효과음이 켜졌습니다');
+                }
+            }
+
+            // --- 전체 화면 토글 ---
+            async function toggleFullscreen() {
+                try {
+                    if (!document.fullscreenElement) {
+                        await document.documentElement.requestFullscreen();
+                    } else {
+                        if (document.exitFullscreen) {
+                            await document.exitFullscreen();
+                        }
+                    }
+                } catch (err) {
+                    showToast('브라우저 설정으로 인해 전체 화면 전환이 제한되었습니다');
+                }
+            }
+
+            // 전체 화면 상태 변경 감지하여 아이콘/텍스트 동기화
+            document.addEventListener('fullscreenchange', () => {
+                if (document.fullscreenElement) {
+                    expandIcon.classList.add('hidden');
+                    compressIcon.classList.remove('hidden');
+                    fullscreenLabel.textContent = '전체 화면 종료';
+                } else {
+                    compressIcon.classList.add('hidden');
+                    expandIcon.classList.remove('hidden');
+                    fullscreenLabel.textContent = '전체 화면';
+                }
+            });
+
+            // --- 블루투스 키보드 이벤트 리스너 ---
+            window.addEventListener('keydown', (e) => {
+                // 키를 꾹 누르고 있을 때 연속 입력(repeat) 방지
+                if (e.repeat) return;
+
+                // 스페이스바: 시작 / 정지 (기본 페이지 스크롤 완벽 차단)
+                if (e.code === 'Space' || e.key === ' ') {
+                    e.preventDefault();
+                    // 포커스된 버튼이 있어도 스페이스바가 중복 클릭되지 않도록 블러 처리
+                    if (document.activeElement instanceof HTMLElement) {
+                        document.activeElement.blur();
+                    }
+                    toggleTimer();
+                    return;
+                }
+
+                const key = e.key.toLowerCase();
+
+                // 초기화: R, Backspace, Escape
+                if (key === 'r' || e.key === 'Backspace' || e.key === 'Escape') {
+                    // Escape의 경우 전체화면 종료와 겹치지 않도록 타이머가 작동/일시정지 상태일 때만 초기화
+                    if (e.key === 'Escape' && document.fullscreenElement) {
+                        return; 
+                    }
+                    e.preventDefault();
+                    resetTimer();
+                    return;
+                }
+
+                // 구간 기록: L 또는 Enter
+                if (key === 'l' || e.key === 'Enter') {
+                    // 버튼에 포커스가 있을 때 Enter 중복 실행 방지
+                    if (document.activeElement instanceof HTMLButtonElement) return;
+                    e.preventDefault();
+                    recordLap();
+                    return;
+                }
+
+                // 전체 화면: F
+                if (key === 'f') {
+                    e.preventDefault();
+                    toggleFullscreen();
+                    return;
+                }
+
+                // 음소거: M
+                if (key === 'm') {
+                    e.preventDefault();
+                    toggleMute();
+                    return;
+                }
+            });
+
+            // --- 마우스 / 터치 버튼 클릭 이벤트 연결 ---
+            toggleBtn.addEventListener('click', toggleTimer);
+            lapBtn.addEventListener('click', recordLap);
+            resetBtn.addEventListener('click', resetTimer);
+            muteBtn.addEventListener('click', toggleMute);
+            fullscreenBtn.addEventListener('click', toggleFullscreen);
+
+            // 초기 렌더링
+            renderTime(0);
+            updateVisualState('READY');
+        });
+    </script>
+</body>
+</html>
